@@ -25,7 +25,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import anthropic
+import subprocess
+
 import requests
 
 # ─── Config ───────────────────────────────────────────────────────────────────
@@ -233,11 +234,8 @@ def generate_artifacts(
     ticket_text: str,
     ticket_id: str,
     env: str,
-    api_key: str,
     source_files: list[tuple[Path, str]],
 ) -> dict:
-    client = anthropic.Anthropic(api_key=api_key)
-
     source_context = ""
     if source_files:
         source_context = "\n\n--- RELEVANT SOURCE FILES ---\n"
@@ -258,13 +256,16 @@ def generate_artifacts(
     if source_files:
         print(f"  (included {len(source_files)} relevant source file(s) for context)")
 
-    message = client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=8192,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_msg}],
+    result = subprocess.run(
+        ["claude", "-p", user_msg, "--system-prompt", SYSTEM_PROMPT,
+         "--model", "sonnet", "--dangerously-skip-permissions"],
+        capture_output=True,
+        text=True,
+        timeout=600,
     )
-    return parse_sections(message.content[0].text, ticket_id)
+    if result.returncode != 0:
+        sys.exit(f"ERROR: claude CLI failed:\n{result.stderr.strip()}")
+    return parse_sections(result.stdout, ticket_id)
 
 
 def parse_sections(raw: str, ticket_id: str) -> dict:
@@ -569,10 +570,6 @@ def main():
     args = parser.parse_args()
 
     # ── Auth ──────────────────────────────────────────────────────────────────
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        sys.exit("ERROR: ANTHROPIC_API_KEY not set.\nRun: export ANTHROPIC_API_KEY=your_key")
-
     yt_token = args.yt_token or os.getenv("YOUTRACK_TOKEN")
     if not yt_token:
         sys.exit("ERROR: YOUTRACK_TOKEN not set.\nRun: export YOUTRACK_TOKEN=your_token")
@@ -603,7 +600,7 @@ def main():
         print("  No matching source files found — Claude will infer from ticket only.")
 
     # ── 3. Generate artifacts ─────────────────────────────────────────────────
-    artifacts = generate_artifacts(text, ticket_id, args.env, api_key, source_files)
+    artifacts = generate_artifacts(text, ticket_id, args.env, source_files)
     saved = {"env": args.env}
 
     # ── 4. Save REST Assured test ─────────────────────────────────────────────
